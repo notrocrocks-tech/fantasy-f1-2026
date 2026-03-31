@@ -209,7 +209,7 @@ async function loadParticipants() {
   if (!JSONBIN_KEY || !JSONBIN_ID) return []
   try {
     const res = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}/latest`, {
-      headers: { "X-Access-Key": JSONBIN_KEY },
+      headers: { "X-Master-Key": JSONBIN_KEY },
     })
     if (!res.ok) return []
     const data = await res.json()
@@ -226,7 +226,7 @@ async function saveParticipantsRemote(participants) {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
-        "X-Access-Key": JSONBIN_KEY,
+        "X-Master-Key": JSONBIN_KEY,
       },
       body: JSON.stringify({ participants }),
     })
