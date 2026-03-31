@@ -1,9 +1,72 @@
 import { useState, useEffect, useRef } from "react";
 
-// ─── API endpoint — calls our secure Netlify function ─────────────────────
-const API_URL = "/.netlify/functions/anthropic";
+// ─── Jolpica F1 API (free, open source, no API key needed) ──────────────
+const JOLPICA_BASE = "https://api.jolpi.ca/ergast/f1";
+const SEASON = "2026";
 
-// ─── 2026 Driver lineup ───────────────────────────────────────────────────
+async function jolpicaFetch(endpoint) {
+  const res = await fetch(`${JOLPICA_BASE}${endpoint}`);
+  if (!res.ok) throw new Error(`Jolpica API returned ${res.status}`);
+  const data = await res.json();
+  return data.MRData;
+}
+
+async function fetchDriverStandings() {
+  try {
+    const data = await jolpicaFetch(`/${SEASON}/driverstandings.json`);
+    const lists = data?.StandingsTable?.StandingsLists;
+    if (!lists || lists.length === 0) return [];
+    return lists[0].DriverStandings.map((s) => ({
+      pos: parseInt(s.position),
+      name: `${s.Driver.givenName} ${s.Driver.familyName}`,
+      team: s.Constructors?.[0]?.name || "Unknown",
+      points: parseFloat(s.points),
+      wins: parseInt(s.wins),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function fetchConstructorStandings() {
+  try {
+    const data = await jolpicaFetch(`/${SEASON}/constructorstandings.json`);
+    const lists = data?.StandingsTable?.StandingsLists;
+    if (!lists || lists.length === 0) return [];
+    return lists[0].ConstructorStandings.map((s) => ({
+      pos: parseInt(s.position),
+      name: s.Constructor.name,
+      points: parseFloat(s.points),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function fetchRaceResults() {
+  try {
+    const data = await jolpicaFetch(`/${SEASON}/results.json?limit=500`);
+    const races = data?.RaceTable?.Races;
+    if (!races || races.length === 0) return [];
+    return races.map((race) => ({
+      round: parseInt(race.round),
+      name: race.raceName,
+      location: race.Circuit?.Location?.locality || "",
+      date: race.date,
+      results: (race.Results || []).slice(0, 10).map((r) => ({
+        pos: parseInt(r.position),
+        driver: `${r.Driver.givenName} ${r.Driver.familyName}`,
+        team: r.Constructor?.name || "",
+        grid: parseInt(r.grid),
+        points: parseFloat(r.points),
+      })),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// ─── 2026 Driver lineup (for Setup tab dropdown) ────────────────────────
 const F1_2026_DRIVERS = [
   "Max Verstappen", "Liam Lawson",
   "Charles Leclerc", "Lewis Hamilton",
@@ -31,28 +94,6 @@ const TEAM_COLORS = {
 };
 
 const MEDAL = { 1: "#FFD700", 2: "#C0C0C0", 3: "#CD7F32" };
-
-// ─── Secure AI search via Netlify proxy ───────────────────────────────────
-async function aiSearch(prompt) {
-  const res = await fetch(API_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
-      system:
-        "You are an F1 data assistant. Search the web for current data then respond with ONLY valid raw JSON — no markdown fences, no explanation, no preamble.",
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-  const data = await res.json();
-  const text = (data.content || [])
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join("");
-  return JSON.parse(text.replace(/```json|```/gi, "").trim());
-}
 
 // ─── Fantasy scoring ──────────────────────────────────────────────────────
 function fantasyScore(picks, standings) {
@@ -184,33 +225,19 @@ export default function App() {
     setError("");
     try {
       setLoadMsg("Fetching driver standings…");
-      const d = await aiSearch(
-        `Search the web for the latest 2026 Formula 1 World Drivers Championship standings.
-Return ONLY a raw JSON array: [{"pos":1,"name":"Max Verstappen","team":"Red Bull","points":25,"wins":1}]
-Include all drivers. If the season has not started return [].`
-      );
-      setDrivers(Array.isArray(d) ? d : []);
+      const d = await fetchDriverStandings();
+      setDrivers(d);
 
       setLoadMsg("Fetching constructor standings…");
-      const t = await aiSearch(
-        `Search the web for the latest 2026 Formula 1 Constructors Championship standings.
-Return ONLY a raw JSON array: [{"pos":1,"name":"McLaren","points":44}]
-Include all 10 teams. If season not started return [].`
-      );
-      setTeams(Array.isArray(t) ? t : []);
+      const t = await fetchConstructorStandings();
+      setTeams(t);
 
       setLoadMsg("Fetching race results…");
-      const r = await aiSearch(
-        `Search the web for all completed 2026 Formula 1 Grand Prix race results.
-Return ONLY a raw JSON array:
-[{"round":1,"name":"Australian Grand Prix","location":"Melbourne","date":"2026-03-15",
-  "results":[{"pos":1,"driver":"Max Verstappen","team":"Red Bull","grid":1,"points":25}]}]
-Top 10 finishers per race. If no races completed yet return [].`
-      );
-      setRaces(Array.isArray(r) ? r : []);
+      const r = await fetchRaceResults();
+      setRaces(r);
       setUpdated(new Date().toLocaleTimeString());
     } catch (e) {
-      setError("Could not load live data. Check your API key is set in Netlify environment variables. (" + e.message + ")");
+      setError(`Could not load live data from Jolpica F1 API. (${e.message})`);
     }
     setLoading(false);
     setLoadMsg("");
