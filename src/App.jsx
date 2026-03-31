@@ -196,6 +196,45 @@ function Empty({ msg, onAction, actionLabel }) {
   );
 }
 
+// ─── Shared participant storage via JSONBin.io ──────────────────────────
+// To set up: create a free account at https://jsonbin.io
+// 1. Sign up → go to API Keys → copy your Access Key
+// 2. Create a new bin with content: {"participants":[]}
+// 3. Copy the Bin ID from the URL
+// 4. Paste both values below:
+const JSONBIN_KEY = "$2a$10$yaWrWisPy3gPvWb97giaDOxuUXi4Lu5WcgZNmE9RbdkodPC3GY6zi"
+const JSONBIN_ID = "69cbd016aaba882197af566e"
+
+async function loadParticipants() {
+  if (!JSONBIN_KEY || !JSONBIN_ID) return []
+  try {
+    const res = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}/latest`, {
+      headers: { "X-Access-Key": JSONBIN_KEY },
+    })
+    if (!res.ok) return []
+    const data = await res.json()
+    return data?.record?.participants || []
+  } catch {
+    return []
+  }
+}
+
+async function saveParticipantsRemote(participants) {
+  if (!JSONBIN_KEY || !JSONBIN_ID) return
+  try {
+    await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Access-Key": JSONBIN_KEY,
+      },
+      body: JSON.stringify({ participants }),
+    })
+  } catch (e) {
+    console.warn("Failed to save participants:", e)
+  }
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState("setup");
@@ -203,6 +242,7 @@ export default function App() {
   const [formName, setFormName] = useState("");
   const [formPicks, setFormPicks] = useState(["", "", "", "", "", ""]);
   const [editIdx, setEditIdx] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   const [drivers, setDrivers] = useState([]);
   const [teams, setTeams] = useState([]);
@@ -212,6 +252,23 @@ export default function App() {
   const [error, setError] = useState("");
   const [updated, setUpdated] = useState(null);
   const didFetch = useRef(false);
+
+  // Load participants from shared storage on mount
+  useEffect(() => {
+    loadParticipants().then((p) => {
+      if (p.length > 0) setParticipants(p);
+    });
+  }, []);
+
+  // Helper: update participants and persist to shared storage
+  function updateParticipants(updater) {
+    setParticipants((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      setSaving(true);
+      saveParticipantsRemote(next).finally(() => setSaving(false));
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (tab !== "setup" && !didFetch.current) {
@@ -252,12 +309,12 @@ export default function App() {
     if (!formName.trim()) return;
     const picks = formPicks.filter((p) => p.trim());
     if (editIdx !== null) {
-      setParticipants((prev) =>
+      updateParticipants((prev) =>
         prev.map((p, i) => (i === editIdx ? { name: formName.trim(), picks } : p))
       );
       setEditIdx(null);
     } else {
-      setParticipants((prev) => [...prev, { name: formName.trim(), picks }]);
+      updateParticipants((prev) => [...prev, { name: formName.trim(), picks }]);
     }
     setFormName("");
     setFormPicks(["", "", "", "", "", ""]);
@@ -384,6 +441,18 @@ export default function App() {
                 Add participants and assign up to 6 drivers each.<br />
                 Fantasy points are the sum of those drivers' real F1 championship points.
               </p>
+              {!JSONBIN_KEY || !JSONBIN_ID ? (
+                <div style={{
+                  marginTop: 12, padding: "10px 16px", borderRadius: 6,
+                  background: "rgba(255,165,0,0.1)", border: "1px solid rgba(255,165,0,0.3)",
+                  color: "#ffaa00", fontSize: 13,
+                }}>
+                  ⚠ Shared storage not configured — participant data will be lost on refresh.
+                  See App.jsx comments for JSONBin setup instructions.
+                </div>
+              ) : saving ? (
+                <div style={{ marginTop: 8, color: "#888", fontSize: 12 }}>Saving…</div>
+              ) : null}
             </div>
 
             {/* Form */}
@@ -465,7 +534,7 @@ export default function App() {
                         <button style={S.ghost} onClick={() => startEdit(i)}>Edit</button>
                         <button
                           style={{ ...S.ghost, color: "#e60000", borderColor: "rgba(230,0,0,0.3)" }}
-                          onClick={() => setParticipants((prev) => prev.filter((_, x) => x !== i))}>
+                          onClick={() => updateParticipants((prev) => prev.filter((_, x) => x !== i))}>
                           Remove
                         </button>
                       </div>
