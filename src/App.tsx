@@ -98,6 +98,43 @@ async function jolpicaFetch(endpoint: string) {
   return data.MRData
 }
 
+// The Jolpica API caps `limit` at 100 rows per request, so a full season of
+// results must be fetched in pages. A race can be split across page
+// boundaries, so races with the same round are merged.
+async function jolpicaFetchAllRaces(endpoint: string): Promise<any[]> {
+  const PAGE_SIZE = 100
+  const MAX_PAGES = 30 // safety cap (~3000 rows, far beyond a full season)
+  const byRound = new Map<string, any>()
+  let offset = 0
+  let total = Infinity
+
+  for (let page = 0; page < MAX_PAGES && offset < total; page++) {
+    const res = await fetch(`${JOLPICA_BASE}${endpoint}?limit=${PAGE_SIZE}&offset=${offset}`)
+    if (!res.ok) throw new Error(`Jolpica API returned ${res.status}`)
+    const data = await res.json()
+    const mr = data.MRData
+    total = parseInt(mr?.total) || 0
+
+    const races = mr?.RaceTable?.Races || mr?.SprintTable?.Races || []
+    for (const race of races) {
+      const existing = byRound.get(race.round)
+      if (existing) {
+        existing.Results.push(...(race.Results || []))
+        existing.SprintResults.push(...(race.SprintResults || []))
+      } else {
+        byRound.set(race.round, {
+          ...race,
+          Results: [...(race.Results || [])],
+          SprintResults: [...(race.SprintResults || [])],
+        })
+      }
+    }
+    offset += PAGE_SIZE
+  }
+
+  return [...byRound.values()]
+}
+
 async function fetchDriverStandings(): Promise<Driver[]> {
   try {
     const data = await jolpicaFetch(`/${SEASON}/driverstandings.json`)
@@ -134,8 +171,7 @@ async function fetchConstructorStandings(): Promise<Team[]> {
 
 async function fetchRaceResults(): Promise<RaceResult[]> {
   try {
-    const data = await jolpicaFetch(`/${SEASON}/results.json?limit=500`)
-    const races = data?.RaceTable?.Races
+    const races = await jolpicaFetchAllRaces(`/${SEASON}/results.json`)
     if (!races || races.length === 0) return []
     return races.map((race: any) => ({
       round: parseInt(race.round),
@@ -158,15 +194,14 @@ async function fetchRaceResults(): Promise<RaceResult[]> {
 
 async function fetchSprintResults(): Promise<RaceResult[]> {
   try {
-    const data = await jolpicaFetch(`/${SEASON}/sprint.json?limit=500`)
-    const races = data?.SprintTable?.Races || data?.RaceTable?.Races || []
+    const races = await jolpicaFetchAllRaces(`/${SEASON}/sprint.json`)
     if (races.length === 0) return []
     return races.map((race: any) => ({
       round: parseInt(race.round),
       name: race.raceName,
       location: race.Circuit?.Location?.locality || '',
       date: race.date,
-      results: (race.SprintResults || race.Results || []).map((r: any) => ({
+      results: (race.SprintResults?.length ? race.SprintResults : race.Results || []).map((r: any) => ({
         pos: parseInt(r.position),
         driver: `${r.Driver.givenName} ${r.Driver.familyName}`,
         team: r.Constructor?.name || '',
